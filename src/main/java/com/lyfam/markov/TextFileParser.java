@@ -3,6 +3,7 @@ package com.lyfam.markov;
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.InputStreamReader;
 import java.io.Serializable;
@@ -14,6 +15,14 @@ import java.util.Map.Entry;
 import java.util.Random;
 import java.util.StringTokenizer;
 
+import org.apache.commons.cli.CommandLine;
+import org.apache.commons.cli.CommandLineParser;
+import org.apache.commons.cli.GnuParser;
+import org.apache.commons.cli.HelpFormatter;
+import org.apache.commons.cli.Option;
+import org.apache.commons.cli.OptionBuilder;
+import org.apache.commons.cli.Options;
+import org.apache.commons.cli.ParseException;
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.io.LineIterator;
 import org.apache.commons.lang3.SerializationUtils;
@@ -22,73 +31,28 @@ public class TextFileParser implements Serializable
 {
     private static final long serialVersionUID = 1L;
     
-    private File inputFIle;
+    private MarkovModelBuilder modelBuidler;
     
-    public TextFileParser(File input)
+    public TextFileParser()
     {
-        this.inputFIle = input;
+    	modelBuidler = new MarkovModelBuilder();
     }
     
-    public Map<String, WordProbability[]> parse()
+    public void saveMarkovModelForFile(File input, File output)
     {
-        try
-        {
-            Map<String, WordFrequency> transitionMap = new HashMap<String, WordFrequency>();
-            LineIterator li = FileUtils.lineIterator(inputFIle);
-            
-            String prevWord = null;
-            
-            while (li.hasNext())
-            {
-                String line = (String) li.next();
-                StringTokenizer wordTokenizer = new StringTokenizer(line);
-                while (wordTokenizer.hasMoreTokens())
-                {
-                    String word = wordTokenizer.nextToken().toLowerCase();
-                    
-                    if (prevWord == null)
-                    {
-                        TextFileParser.WordFrequency wf = new WordFrequency();
-                        transitionMap.put(word, wf);
-                    }
-                    else
-                    {
-                        TextFileParser.WordFrequency wf = transitionMap.get(prevWord);
-                        if (wf == null)
-                        {
-                            wf = new WordFrequency();
-                            wf.addWord(word);
-                            transitionMap.put(prevWord, wf);
-                        }
-                        else
-                        {
-                            wf.addWord(word);
-                        }
-                    }
-                    
-                    prevWord = word;
-                }
-            }
-            
-            return this.getCalculateProb(transitionMap);
-        }
-        catch (Throwable t)
-        {
-            throw new RuntimeException(t);
-        }
-    }
-    
-    private Map<String, WordProbability[]> getCalculateProb(Map<String, WordFrequency> wordFreqMap)
-    {
-        Map<String, WordProbability[]> res = new HashMap<String, TextFileParser.WordProbability[]>();
-        for (Entry<String, WordFrequency> entry : wordFreqMap.entrySet())
-        {
-        	WordProbability[] array = entry.getValue().getSortedProbWordArray();
-        	if (array.length > 0)
-        		res.put(entry.getKey(), array);
-        }
-        
-        return res;
+    	Map<String, WordProbability[]> wordMap = modelBuidler.parse(input);
+    	
+    	FileOutputStream out;
+		try
+		{
+			out = new FileOutputStream(output);
+		}
+		catch (FileNotFoundException e)
+		{
+			throw new RuntimeException(e);
+		}
+    	
+    	SerializationUtils.serialize((Serializable) wordMap, out);
     }
     
     public void generate(File file, String startWith) throws Exception
@@ -97,7 +61,6 @@ public class TextFileParser implements Serializable
         Map<String, WordProbability[]> wordMap = (Map<String, WordProbability[]>) SerializationUtils.deserialize(new FileInputStream(file));
         System.out.println(" -- done --");
         
-        TextFileParser p = new TextFileParser(null);
         Random rand = new Random();
         
         StringBuffer sb = new StringBuffer();
@@ -115,15 +78,15 @@ public class TextFileParser implements Serializable
             
             counted++;
             double var = rand.nextDouble();
-            int index = Arrays.binarySearch(array, p.new WordProbability("", var), new Comparator<WordProbability>()
+            int index = Arrays.binarySearch(array, new WordProbability("", var), new Comparator<WordProbability>()
             {
                 @Override
                 public int compare(WordProbability o1, WordProbability o2)
                 {
-                    if (o1.word.equals(o2.word))
+                    if (o1.getWord().equals(o2.getWord()))
                         return 0;
                     
-                    if (o1.prob > o2.prob)
+                    if (o1.getProb() > o2.getProb())
                         return 1;
                     else
                         return -1;
@@ -151,15 +114,17 @@ public class TextFileParser implements Serializable
         System.out.println("Type a text:");        
         String text = br.readLine();
         
+        StringBuffer bf = new StringBuffer();
         while (!"quit".equals(text))
         {
+        	bf.append(text).append(" ");
         	WordProbability[] array = wordMap.get(text);
         	if (array != null && array.length > 0)
-        	{        		
+        	{
         		int idx = array.length - 1;
-        		System.out.print(text + ": ");
+        		System.out.print(bf.toString() + ": ");
         		int count = 0;
-        		while (idx >= 0)
+        		while (idx >= 0 && count < 5)
         		{
         			System.out.print(array[idx].getWord() + " --- ");
         			idx--;
@@ -172,127 +137,99 @@ public class TextFileParser implements Serializable
         }
     }
     
-    public static void main(String... args) throws Exception
+    private static Options makeCLIOptions()
     {
-//        File file = new File("/Users/dmly/Downloads/christmascarol.txt");
-//        TextFileParser p = new TextFileParser(file);
-//        Map<String, WordProbability[]> res = p.parse();
-//
-//        FileOutputStream out = new FileOutputStream("/Users/dmly/Downloads/christmascarol.bin");
-//        SerializationUtils.serialize((Serializable) res, out);
-        
-        TextFileParser p = new TextFileParser(null);
-        File file = new File("/Users/dmly/Downloads/christmascarol.bin");
-        //p.generate(file, "christmas");
-        
-        p.prediction(file);
+    	Option help = new Option( "help", "print this message" );
+    	Option build = OptionBuilder.withArgName( "buildfile" )
+						                .hasArg()
+						                .withDescription(  "build the Markov model from a text file" )
+						                .create( "build" );
+    	
+    	Option out = OptionBuilder.withArgName( "outfile" )
+                .hasArg()
+                .withDescription(  "The file name to save the built model" )
+                .create( "out" );
+    	
+    	Option generate = OptionBuilder.withArgName( "startWord" )
+                .hasArg()
+                .withDescription(  "Generate random crap" )
+                .create( "generate" );
+    	
+    	Option modelFile = OptionBuilder.withArgName( "modelFile" )
+                .hasArg()
+                .withDescription(  "Load from this model file" )
+                .create( "modelFile" );
+    	
+    	Option prediction = OptionBuilder
+                .withDescription(  "Predict a complete text" )
+                .create( "predict" );
+    	
+    	Options options = new Options();
+
+    	options.addOption(help);
+    	options.addOption(build);
+    	options.addOption(out);
+    	options.addOption(generate);
+    	options.addOption(modelFile);
+    	options.addOption(prediction);
+    	
+    	return options;
     }
     
-    class WordFrequency implements Serializable
+    public static void main(String... args) throws Exception
     {
-        private static final long serialVersionUID = 1L;
-
-        private Map<String, Long> wordMap;
-
-        private long sum = 0L;
-        
-        public long getSum()
-        {
-            return sum;
+    	Options opts = makeCLIOptions();
+    	
+    	HelpFormatter formatter = new HelpFormatter();
+    	formatter.printHelp("markovizer", opts);
+    	
+    	CommandLineParser parser = new GnuParser();
+    	CommandLine line = null;
+    	try
+    	{
+            // parse the command line arguments
+            line = parser.parse( opts, args );
         }
-
-        public void setSum(long sum)
-        {
-            this.sum = sum;
+        catch( ParseException exp ) {
+            // oops, something went wrong
+            System.err.println( "Parsing failed.  Reason: " + exp.getMessage() );
+            System.exit(0);
         }
-
-        public WordFrequency()
-        {
-            wordMap = new HashMap<String, Long>();
-        }
-        
-        public void addWord(String word)
-        {
-            sum += 1;
-            
-            Long count = wordMap.get(word);
-            if (count == null)
-            {
-                wordMap.put(word, 1L);
-            }
-            else
-            {
-                wordMap.put(word, count + 1);
-            }
-        }
-        
-        public WordProbability[] getSortedProbWordArray()
-        {
-            WordProbability[] res = new WordProbability[this.wordMap.size()];
-            
-            int i = 0;
-            for (Entry<String, Long> entry : this.wordMap.entrySet())
-            {
-                res[i] = new WordProbability(entry.getKey(), (double) entry.getValue() / this.sum);
-                i++;
-            }
-            
-            Arrays.sort(res, new Comparator<WordProbability>()
-            {
-                @Override
-                public int compare(WordProbability o1, WordProbability o2)
-                {
-                    if (o1.getWord().equals(o2.getWord()))
-                        return 0;
-                    
-                    if (o1.getProb() > o2.getProb())
-                        return 1;
-                    else
-                        return -1;
-                }
-            });
-            
-            for (int idx = 1; idx < res.length; idx++)
-            {
-                res[idx].setProb(res[idx - 1].getProb() + res[idx].getProb());
-            }
-            
-            return res;
-        }
-    }    
-    
-    class WordProbability implements Serializable
-    {
-        private static final long serialVersionUID = 1L;
-        
-        private String word;
-        private double prob;
-        
-        public WordProbability(String word, double prob)
-        {
-            this.word = word;
-            this.prob = prob;
-        }
-        
-        public void setWord(String word)
-        {
-            this.word = word;
-        }
-
-        public void setProb(double prob)
-        {
-            this.prob = prob;
-        }
-        
-        public String getWord()
-        {
-            return word;
-        }
-
-        public double getProb()
-        {
-            return prob;
-        }
-        
+    	
+    	TextFileParser p = new TextFileParser();
+    	
+    	if( line.hasOption( "build" ) )
+    	{
+    	    String buildfile = line.getOptionValue( "build" );
+    	    if (!line.hasOption("out"))
+    	    {
+    	    	System.out.println("Must specify a output filename.");
+    	    	return;
+    	    }
+    	    
+    	    String outfile = line.getOptionValue("out");
+    	    p.saveMarkovModelForFile(new File(buildfile), new File(outfile));
+    	    
+    	    return;
+    	}
+    	
+    	if (line.hasOption("generate"))
+    	{
+    		String startWord = line.getOptionValue("generate");
+    	    if (!line.hasOption("modelFile"))
+    	    {
+    	    	System.out.println("Must specify a model filename.");
+    	    	return;
+    	    }
+    	    
+    	    String modelFile = line.getOptionValue("modelFile");
+    	    p.generate(new File(modelFile), startWord);
+    	}
+    	
+    	if (line.hasOption("predict"))
+    	{
+    	    String modelFile = line.getOptionValue("modelFile");
+            p.prediction(new File(modelFile));
+    	}
     }
 }
